@@ -3,7 +3,8 @@ import pandas as pd
 import os
 
 # Database path
-DB_PATH = "database/olist.db"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB_PATH = os.path.join(BASE_DIR, "database", "customer_intelligence.db")
 
 # Check database exists
 print("Database exists:", os.path.exists(DB_PATH))
@@ -22,6 +23,8 @@ rfm_analysis = pd.read_sql_query(
     FROM orders o
 JOIN payments p
     ON o.order_id = p.order_id
+    GROUP BY o.customer_id
+
     """,
     connection
 )
