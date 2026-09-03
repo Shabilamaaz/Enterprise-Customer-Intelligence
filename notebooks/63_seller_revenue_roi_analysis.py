@@ -2,7 +2,6 @@ import sqlite3
 import pandas as pd
 from pathlib import Path
 
-
 # ============================================================
 # Step 63: Seller Revenue ROI Analysis
 # ============================================================
@@ -13,43 +12,32 @@ print("============================================================")
 
 
 # ============================================================
-# Step 1: Find Database Automatically
+# Step 1: Find Project Root
 # ============================================================
 
 current_file = Path(__file__).resolve()
 
-# Project root = parent folder of notebooks
+# notebooks folder ka parent = project root
 project_root = current_file.parent.parent
 
-expected_db = project_root / "data" / "database" / "olist.db"
+# ============================================================
+# Step 2: Connect to Correct Database
+# ============================================================
 
+db_path = project_root / "database" / "customer_intelligence.db"
 
-# Search database if expected location does not exist
-if expected_db.exists():
-
-    db_path = expected_db
-
-else:
-
-    db_files = list(project_root.rglob("olist.db"))
-
-    if not db_files:
-        raise FileNotFoundError(
-            "\nERROR: olist.db database file was not found.\n"
-            f"Project folder searched: {project_root}\n"
-            "Please make sure olist.db exists inside the project."
-        )
-
-    db_path = db_files[0]
-
-
-print("\nDatabase found at:")
+print("\nDatabase path:")
 print(db_path)
 
 
-# ============================================================
-# Step 2: Connect to Database
-# ============================================================
+# Check database exists
+if not db_path.exists():
+    raise FileNotFoundError(
+        "\nERROR: customer_intelligence.db was not found.\n"
+        f"Expected location:\n{db_path}\n\n"
+        "Please run 04_create_database.py first."
+    )
+
 
 connection = sqlite3.connect(str(db_path))
 
@@ -57,121 +45,62 @@ print("\nDatabase connection successful.")
 
 
 # ============================================================
-# Step 3: Check Available Tables
+# Step 3: Check Required Tables
 # ============================================================
 
-tables_query = """
-SELECT name
-FROM sqlite_master
-WHERE type = 'table'
-ORDER BY name
-"""
-
-tables_df = pd.read_sql_query(
-    tables_query,
+tables = pd.read_sql_query(
+    """
+    SELECT name
+    FROM sqlite_master
+    WHERE type = 'table'
+    ORDER BY name
+    """,
     connection
 )
 
-available_tables = tables_df["name"].tolist()
+available_tables = set(tables["name"].tolist())
 
 print("\nAvailable tables in database:")
+for table in sorted(available_tables):
+    print(f"- {table}")
 
-for table in available_tables:
-    print(" -", table)
 
-
-# ============================================================
-# Step 4: Detect Orders Table
-# ============================================================
-
-orders_candidates = [
+required_tables = {
     "orders",
-    "olist_orders_dataset"
-]
+    "order_items"
+}
 
-orders_table = None
-
-for table in orders_candidates:
-
-    if table in available_tables:
-        orders_table = table
-        break
+missing_tables = required_tables - available_tables
 
 
-if orders_table is None:
-
+if missing_tables:
     connection.close()
 
     raise RuntimeError(
-        "\nERROR: Orders table was not found.\n"
-        "Expected one of:\n"
-        " - orders\n"
-        " - olist_orders_dataset"
+        "\nERROR: Required table(s) not found:\n"
+        + "\n".join(f"- {table}" for table in sorted(missing_tables))
+        + "\n\nPlease run 04_create_database.py first."
     )
 
 
 # ============================================================
-# Step 5: Detect Order Items Table
+# Step 4: Load Seller Revenue and Cost Data
 # ============================================================
 
-order_items_candidates = [
-    "order_items",
-    "olist_order_items_dataset"
-]
-
-order_items_table = None
-
-for table in order_items_candidates:
-
-    if table in available_tables:
-        order_items_table = table
-        break
-
-
-if order_items_table is None:
-
-    connection.close()
-
-    raise RuntimeError(
-        "\nERROR: Order items table was not found.\n"
-        "Expected one of:\n"
-        " - order_items\n"
-        " - olist_order_items_dataset"
-    )
-
-
-print("\nOrders table detected:")
-print(orders_table)
-
-print("\nOrder Items table detected:")
-print(order_items_table)
-
-
-# ============================================================
-# Step 6: Load Seller Revenue and Cost Data
-# ============================================================
-
-query = f"""
+query = """
 SELECT
     oi.seller_id,
-
     COUNT(DISTINCT oi.order_id) AS total_orders,
-
     SUM(oi.price) AS total_revenue,
-
     SUM(oi.freight_value) AS total_freight_cost,
-
     AVG(oi.price) AS average_order_value
 
-FROM "{order_items_table}" oi
+FROM order_items oi
 
-JOIN "{orders_table}" o
+JOIN orders o
     ON oi.order_id = o.order_id
 
-WHERE o.order_status NOT IN (
-    'canceled',
-    'unavailable'
-)
+WHERE o.order_status NOT IN ('canceled', 'unavailable')
 
 GROUP BY oi.seller_id
 """
@@ -184,15 +113,15 @@ seller_data = pd.read_sql_query(
 
 
 # ============================================================
-# Step 7: Check Seller Data
+# Step 5: Check Data
 # ============================================================
 
-print("\nTotal sellers analyzed:")
-print(len(seller_data))
+print(
+    f"\nTotal sellers analyzed: {len(seller_data)}"
+)
 
 
 if seller_data.empty:
-
     connection.close()
 
     raise RuntimeError(
@@ -201,7 +130,7 @@ if seller_data.empty:
 
 
 # ============================================================
-# Step 8: Calculate Total Cost
+# Step 6: Calculate Total Cost
 # ============================================================
 
 seller_data["total_cost"] = (
@@ -210,7 +139,7 @@ seller_data["total_cost"] = (
 
 
 # ============================================================
-# Step 9: Calculate Profit
+# Step 7: Calculate Profit
 # ============================================================
 
 seller_data["profit"] = (
@@ -220,14 +149,13 @@ seller_data["profit"] = (
 
 
 # ============================================================
-# Step 10: Calculate ROI
+# Step 8: Calculate ROI
 # ============================================================
 
 seller_data["roi_percentage"] = seller_data.apply(
     lambda row:
         (
-            row["profit"]
-            / row["total_cost"]
+            row["profit"] / row["total_cost"]
         ) * 100
         if row["total_cost"] > 0
         else 0,
@@ -236,7 +164,7 @@ seller_data["roi_percentage"] = seller_data.apply(
 
 
 # ============================================================
-# Step 11: Categorize ROI
+# Step 9: Categorize ROI
 # ============================================================
 
 def classify_roi(roi):
@@ -264,7 +192,7 @@ seller_data["roi_category"] = (
 
 
 # ============================================================
-# Step 12: Sort Sellers by ROI
+# Step 10: Sort Sellers by ROI
 # ============================================================
 
 top_sellers = (
@@ -278,8 +206,13 @@ top_sellers = (
 
 
 # ============================================================
-# Step 13: Define Result Columns
+# Step 11: Display Seller ROI Analysis
 # ============================================================
+
+print("\n============================================================")
+print("Seller Revenue ROI Analysis")
+print("============================================================")
+
 
 result_columns = [
     "seller_id",
@@ -292,14 +225,6 @@ result_columns = [
 ]
 
 
-# ============================================================
-# Step 14: Display Seller ROI Analysis
-# ============================================================
-
-print("\n============================================================")
-print("Seller Revenue ROI Analysis")
-print("============================================================")
-
 print(
     seller_data[
         result_columns
@@ -310,12 +235,13 @@ print(
 
 
 # ============================================================
-# Step 15: Top 10 Sellers by ROI
+# Step 12: Top 10 Sellers by ROI
 # ============================================================
 
 print("\n============================================================")
 print("Top 10 Sellers by ROI")
 print("============================================================")
+
 
 print(
     top_sellers[
@@ -326,42 +252,36 @@ print(
 
 
 # ============================================================
-# Step 16: ROI Category Summary
+# Step 13: ROI Category Summary
 # ============================================================
 
 print("\n============================================================")
 print("ROI Category Summary")
 print("============================================================")
 
+
 print(
-    seller_data[
-        "roi_category"
-    ]
+    seller_data["roi_category"]
     .value_counts()
     .to_string()
 )
 
 
 # ============================================================
-# Step 17: ROI Statistics
+# Step 14: ROI Statistics
 # ============================================================
 
-highest_roi = seller_data[
-    "roi_percentage"
-].max()
+highest_roi = seller_data["roi_percentage"].max()
 
-average_roi = seller_data[
-    "roi_percentage"
-].mean()
+average_roi = seller_data["roi_percentage"].mean()
 
-lowest_roi = seller_data[
-    "roi_percentage"
-].min()
+lowest_roi = seller_data["roi_percentage"].min()
 
 
 print("\n============================================================")
 print("ROI Statistics")
 print("============================================================")
+
 
 print(
     f"Highest ROI : {highest_roi:.2f}%"
@@ -377,7 +297,7 @@ print(
 
 
 # ============================================================
-# Step 18: Best Seller by ROI
+# Step 15: Best Seller
 # ============================================================
 
 best_seller = seller_data.loc[
@@ -388,6 +308,7 @@ best_seller = seller_data.loc[
 print("\n============================================================")
 print("Best Seller by ROI")
 print("============================================================")
+
 
 print(
     f"Seller ID      : {best_seller['seller_id']}"
@@ -419,7 +340,7 @@ print(
 
 
 # ============================================================
-# Step 19: Close Database Connection
+# Step 16: Close Database Connection
 # ============================================================
 
 connection.close()
@@ -430,8 +351,5 @@ connection.close()
 # ============================================================
 
 print("\n============================================================")
-print(
-    "Step 63 Seller Revenue ROI Analysis "
-    "completed successfully."
-)
+print("Step 63 Seller Revenue ROI Analysis completed successfully.")
 print("============================================================")

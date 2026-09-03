@@ -3,11 +3,11 @@ import pandas as pd
 from pathlib import Path
 
 # ============================================================
-# Step 64: Seller Revenue Margin Analysis
+# Step 65: Seller Profitability Analysis
 # ============================================================
 
 print("\n============================================================")
-print("Step 64: Seller Revenue Margin Analysis")
+print("Step 65: Seller Profitability Analysis")
 print("============================================================")
 
 
@@ -25,13 +25,16 @@ project_root = current_file.parent.parent
 # Step 2: Connect to Correct Database
 # ============================================================
 
-db_path = project_root / "database" / "customer_intelligence.db"
+db_path = (
+    project_root
+    / "database"
+    / "customer_intelligence.db"
+)
 
 print("\nDatabase path:")
 print(db_path)
 
 
-# Check database exists
 if not db_path.exists():
     raise FileNotFoundError(
         "\nERROR: customer_intelligence.db was not found.\n"
@@ -64,12 +67,6 @@ available_tables = set(
 )
 
 
-print("\nAvailable tables in database:")
-
-for table in sorted(available_tables):
-    print(f"- {table}")
-
-
 required_tables = {
     "orders",
     "order_items"
@@ -82,7 +79,6 @@ missing_tables = (
 
 
 if missing_tables:
-
     connection.close()
 
     raise RuntimeError(
@@ -91,12 +87,16 @@ if missing_tables:
             f"- {table}"
             for table in sorted(missing_tables)
         )
-        + "\n\nPlease run 04_create_database.py first."
     )
 
 
+print("\nRequired tables found:")
+print("- orders")
+print("- order_items")
+
+
 # ============================================================
-# Step 4: Calculate Seller Revenue and Freight Cost
+# Step 4: Load Seller Profitability Data
 # ============================================================
 
 query = """
@@ -105,13 +105,22 @@ SELECT
 
     COUNT(DISTINCT oi.order_id) AS total_orders,
 
-    SUM(oi.price) AS total_revenue,
+    COUNT(*) AS total_items_sold,
 
-    SUM(oi.freight_value) AS total_freight,
+    ROUND(
+        SUM(oi.price),
+        2
+    ) AS total_revenue,
 
-    SUM(
-        oi.price - oi.freight_value
-    ) AS net_revenue
+    ROUND(
+        SUM(oi.freight_value),
+        2
+    ) AS total_freight_cost,
+
+    ROUND(
+        AVG(oi.price),
+        2
+    ) AS average_item_price
 
 FROM order_items oi
 
@@ -125,7 +134,7 @@ GROUP BY oi.seller_id
 """
 
 
-seller_margin = pd.read_sql_query(
+seller_profitability = pd.read_sql_query(
     query,
     connection
 )
@@ -137,36 +146,42 @@ seller_margin = pd.read_sql_query(
 
 print(
     f"\nTotal sellers analyzed: "
-    f"{len(seller_margin)}"
+    f"{len(seller_profitability)}"
 )
 
 
-if seller_margin.empty:
-
+if seller_profitability.empty:
     connection.close()
 
     raise RuntimeError(
-        "\nERROR: No seller margin data "
-        "was returned from the database."
+        "\nERROR: No seller profitability data "
+        "was returned."
     )
 
 
 # ============================================================
-# Step 6: Calculate Revenue Margin
+# Step 6: Calculate Profit
 # ============================================================
 
-seller_margin["revenue_margin"] = (
-    seller_margin["net_revenue"]
-    / seller_margin["total_revenue"]
+seller_profitability["profit"] = (
+    seller_profitability["total_revenue"]
+    - seller_profitability["total_freight_cost"]
+)
+
+
+# ============================================================
+# Step 7: Calculate Profit Margin
+# ============================================================
+
+seller_profitability["profit_margin"] = (
+    seller_profitability["profit"]
+    /
+    seller_profitability["total_revenue"]
 ) * 100
 
 
-# ============================================================
-# Step 7: Handle Invalid Values
-# ============================================================
-
-seller_margin["revenue_margin"] = (
-    seller_margin["revenue_margin"]
+seller_profitability["profit_margin"] = (
+    seller_profitability["profit_margin"]
     .replace(
         [float("inf"), -float("inf")],
         0
@@ -176,127 +191,230 @@ seller_margin["revenue_margin"] = (
 
 
 # ============================================================
-# Step 8: Categorize Sellers
+# Step 8: Calculate Revenue per Order
 # ============================================================
 
-def margin_category(margin):
+seller_profitability["revenue_per_order"] = (
+    seller_profitability["total_revenue"]
+    /
+    seller_profitability["total_orders"]
+)
 
-    if margin >= 80:
-        return "High Margin"
 
-    elif margin >= 50:
-        return "Medium Margin"
+seller_profitability["revenue_per_order"] = (
+    seller_profitability["revenue_per_order"]
+    .replace(
+        [float("inf"), -float("inf")],
+        0
+    )
+    .fillna(0)
+)
+
+
+# ============================================================
+# Step 9: Calculate Profit per Order
+# ============================================================
+
+seller_profitability["profit_per_order"] = (
+    seller_profitability["profit"]
+    /
+    seller_profitability["total_orders"]
+)
+
+
+seller_profitability["profit_per_order"] = (
+    seller_profitability["profit_per_order"]
+    .replace(
+        [float("inf"), -float("inf")],
+        0
+    )
+    .fillna(0)
+)
+
+
+# ============================================================
+# Step 10: Profitability Classification
+# ============================================================
+
+def classify_profitability(margin):
+
+    if margin >= 70:
+        return "Highly Profitable"
+
+    elif margin >= 40:
+        return "Profitable"
+
+    elif margin >= 20:
+        return "Moderately Profitable"
+
+    elif margin > 0:
+        return "Low Profitability"
 
     else:
-        return "Low Margin"
+        return "Unprofitable"
 
 
-seller_margin["margin_category"] = (
-    seller_margin["revenue_margin"]
-    .apply(margin_category)
+seller_profitability["profitability_category"] = (
+    seller_profitability["profit_margin"]
+    .apply(classify_profitability)
 )
 
 
 # ============================================================
-# Step 9: Sort Sellers by Revenue Margin
+# Step 11: Sort by Profit
 # ============================================================
 
-seller_margin = (
-    seller_margin
+top_profit_sellers = (
+    seller_profitability
     .sort_values(
-        by="revenue_margin",
+        by="profit",
         ascending=False
     )
+    .head(10)
 )
 
 
 # ============================================================
-# Step 10: Display Summary
+# Step 12: Display Seller Profitability
 # ============================================================
+
+result_columns = [
+
+    "seller_id",
+    "total_orders",
+    "total_items_sold",
+    "total_revenue",
+    "total_freight_cost",
+    "profit",
+    "profit_margin",
+    "revenue_per_order",
+    "profit_per_order",
+    "profitability_category"
+
+]
+
 
 print("\n============================================================")
-print("Seller Revenue Margin Analysis")
-print("============================================================")
-
-
-print("\nTotal Sellers:")
-print(
-    len(seller_margin)
-)
-
-
-print("\nAverage Revenue Margin:")
-print(
-    f"{seller_margin['revenue_margin'].mean():.2f}%"
-)
-
-
-print("\nHighest Revenue Margin:")
-print(
-    f"{seller_margin['revenue_margin'].max():.2f}%"
-)
-
-
-print("\nLowest Revenue Margin:")
-print(
-    f"{seller_margin['revenue_margin'].min():.2f}%"
-)
-
-
-# ============================================================
-# Step 11: Margin Category Distribution
-# ============================================================
-
-print("\n============================================================")
-print("Margin Category Distribution")
+print("Seller Profitability Analysis")
 print("============================================================")
 
 
 print(
-    seller_margin["margin_category"]
+    seller_profitability[
+        result_columns
+    ]
+    .head(20)
+    .to_string(index=False)
+)
+
+
+# ============================================================
+# Step 13: Top 10 Most Profitable Sellers
+# ============================================================
+
+print("\n============================================================")
+print("Top 10 Most Profitable Sellers")
+print("============================================================")
+
+
+print(
+    top_profit_sellers[
+        result_columns
+    ]
+    .to_string(index=False)
+)
+
+
+# ============================================================
+# Step 14: Profitability Category Summary
+# ============================================================
+
+print("\n============================================================")
+print("Profitability Category Summary")
+print("============================================================")
+
+
+print(
+    seller_profitability[
+        "profitability_category"
+    ]
     .value_counts()
     .to_string()
 )
 
 
 # ============================================================
-# Step 12: Top 10 Sellers by Revenue Margin
+# Step 15: Overall Statistics
 # ============================================================
 
+total_revenue = (
+    seller_profitability["total_revenue"]
+    .sum()
+)
+
+total_profit = (
+    seller_profitability["profit"]
+    .sum()
+)
+
+average_profit_margin = (
+    seller_profitability["profit_margin"]
+    .mean()
+)
+
+highest_profit = (
+    seller_profitability["profit"]
+    .max()
+)
+
+lowest_profit = (
+    seller_profitability["profit"]
+    .min()
+)
+
+
 print("\n============================================================")
-print("Top 10 Sellers by Revenue Margin")
+print("Profitability Statistics")
 print("============================================================")
 
 
-result_columns = [
-    "seller_id",
-    "total_orders",
-    "total_revenue",
-    "total_freight",
-    "net_revenue",
-    "revenue_margin",
-    "margin_category"
-]
-
+print(
+    f"Total Revenue         : "
+    f"{total_revenue:.2f}"
+)
 
 print(
-    seller_margin[
-        result_columns
-    ]
-    .head(10)
-    .to_string(index=False)
+    f"Total Profit          : "
+    f"{total_profit:.2f}"
+)
+
+print(
+    f"Average Profit Margin : "
+    f"{average_profit_margin:.2f}%"
+)
+
+print(
+    f"Highest Seller Profit : "
+    f"{highest_profit:.2f}"
+)
+
+print(
+    f"Lowest Seller Profit  : "
+    f"{lowest_profit:.2f}"
 )
 
 
 # ============================================================
-# Step 13: Best Seller
+# Step 16: Most Profitable Seller
 # ============================================================
 
-best_seller = seller_margin.iloc[0]
+best_seller = seller_profitability.loc[
+    seller_profitability["profit"].idxmax()
+]
 
 
 print("\n============================================================")
-print("Best Seller by Revenue Margin")
+print("Most Profitable Seller")
 print("============================================================")
 
 
@@ -305,45 +423,39 @@ print(
     f"{best_seller['seller_id']}"
 )
 
-
 print(
     f"Total Orders       : "
     f"{int(best_seller['total_orders'])}"
 )
-
 
 print(
     f"Total Revenue      : "
     f"{best_seller['total_revenue']:.2f}"
 )
 
-
 print(
-    f"Total Freight      : "
-    f"{best_seller['total_freight']:.2f}"
+    f"Total Freight Cost : "
+    f"{best_seller['total_freight_cost']:.2f}"
 )
 
-
 print(
-    f"Net Revenue        : "
-    f"{best_seller['net_revenue']:.2f}"
+    f"Profit             : "
+    f"{best_seller['profit']:.2f}"
 )
 
-
 print(
-    f"Revenue Margin     : "
-    f"{best_seller['revenue_margin']:.2f}%"
+    f"Profit Margin      : "
+    f"{best_seller['profit_margin']:.2f}%"
 )
 
-
 print(
-    f"Margin Category    : "
-    f"{best_seller['margin_category']}"
+    f"Category           : "
+    f"{best_seller['profitability_category']}"
 )
 
 
 # ============================================================
-# Step 14: Close Database Connection
+# Step 17: Close Database Connection
 # ============================================================
 
 connection.close()
@@ -355,7 +467,7 @@ connection.close()
 
 print("\n============================================================")
 print(
-    "Step 64 Seller Revenue Margin Analysis "
+    "Step 65 Seller Profitability Analysis "
     "completed successfully."
 )
 print("============================================================")
