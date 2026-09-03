@@ -43,7 +43,7 @@ action_path = (
 
 
 # ============================================================
-# Step 3: Validate Files
+# Step 3: Validate Required Files
 # ============================================================
 
 required_files = [
@@ -67,17 +67,11 @@ for file_path in required_files:
 # Step 4: Load Data
 # ============================================================
 
-risk_data = pd.read_csv(
-    risk_path
-)
+risk_data = pd.read_csv(risk_path)
 
-priority_data = pd.read_csv(
-    priority_path
-)
+priority_data = pd.read_csv(priority_path)
 
-action_data = pd.read_csv(
-    action_path
-)
+action_data = pd.read_csv(action_path)
 
 
 print(
@@ -97,7 +91,170 @@ print(
 
 
 # ============================================================
-# Step 5: Create Output Directory
+# Step 5: Validate Required Columns
+# ============================================================
+
+required_risk_columns = [
+    "seller_id",
+    "total_revenue",
+    "profit",
+    "risk_score",
+    "risk_category"
+]
+
+required_priority_base_columns = [
+    "seller_id"
+]
+
+required_action_columns = [
+    "seller_id",
+    "total_revenue",
+    "profit",
+    "risk_score",
+    "action_priority"
+]
+
+
+for column in required_risk_columns:
+
+    if column not in risk_data.columns:
+
+        raise KeyError(
+            f'ERROR: Risk data column "{column}" does not exist.'
+        )
+
+
+for column in required_priority_base_columns:
+
+    if column not in priority_data.columns:
+
+        raise KeyError(
+            f'ERROR: Priority data column "{column}" does not exist.'
+        )
+
+
+for column in required_action_columns:
+
+    if column not in action_data.columns:
+
+        raise KeyError(
+            f'ERROR: Action data column "{column}" does not exist.'
+        )
+
+
+# ============================================================
+# Step 6: Recover Priority Score
+# ============================================================
+
+# The previous version failed here when priority_score
+# was missing from the priority CSV.
+#
+# This section makes Step 91 robust.
+
+
+if "priority_score" not in priority_data.columns:
+
+    print(
+        "\nWARNING: priority_score is missing "
+        "from priority data."
+    )
+
+    if (
+        "risk_score" in priority_data.columns
+        and "business_impact_score"
+        in priority_data.columns
+    ):
+
+        priority_data["priority_score"] = (
+            priority_data["risk_score"] * 0.70
+            +
+            priority_data["business_impact_score"] * 0.30
+        )
+
+    elif "risk_score" in priority_data.columns:
+
+        priority_data["priority_score"] = (
+            priority_data["risk_score"]
+        )
+
+    else:
+
+        # Try recovering risk score from risk_data
+        priority_data = priority_data.merge(
+            risk_data[
+                [
+                    "seller_id",
+                    "risk_score"
+                ]
+            ],
+            on="seller_id",
+            how="left",
+            suffixes=("", "_risk")
+        )
+
+        if "risk_score" not in priority_data.columns:
+
+            priority_data["risk_score"] = (
+                priority_data["risk_score_risk"]
+            )
+
+        priority_data["priority_score"] = (
+            priority_data["risk_score"]
+        )
+
+
+priority_data["priority_score"] = pd.to_numeric(
+    priority_data["priority_score"],
+    errors="coerce"
+).fillna(0)
+
+
+# ============================================================
+# Step 7: Recover Priority Score in Action Data
+# ============================================================
+
+if "priority_score" not in action_data.columns:
+
+    print(
+        "\nWARNING: priority_score is missing "
+        "from action data."
+    )
+
+    # First try to recover it from priority data
+    priority_score_lookup = (
+        priority_data[
+            [
+                "seller_id",
+                "priority_score"
+            ]
+        ]
+        .drop_duplicates(
+            subset=["seller_id"]
+        )
+    )
+
+    action_data = action_data.merge(
+        priority_score_lookup,
+        on="seller_id",
+        how="left"
+    )
+
+
+if "priority_score" not in action_data.columns:
+
+    action_data["priority_score"] = (
+        action_data["risk_score"]
+    )
+
+
+action_data["priority_score"] = pd.to_numeric(
+    action_data["priority_score"],
+    errors="coerce"
+).fillna(0)
+
+
+# ============================================================
+# Step 8: Create Output Directory
 # ============================================================
 
 output_directory = (
@@ -114,25 +271,41 @@ output_directory.mkdir(
 
 
 # ============================================================
-# Step 6: Overall KPI Calculation
+# Step 9: Overall KPI Calculation
 # ============================================================
 
 total_sellers = len(risk_data)
 
+
 total_revenue = (
-    risk_data["total_revenue"]
+    pd.to_numeric(
+        risk_data["total_revenue"],
+        errors="coerce"
+    )
+    .fillna(0)
     .sum()
 )
+
 
 total_profit = (
-    risk_data["profit"]
+    pd.to_numeric(
+        risk_data["profit"],
+        errors="coerce"
+    )
+    .fillna(0)
     .sum()
 )
 
+
 average_risk_score = (
-    risk_data["risk_score"]
+    pd.to_numeric(
+        risk_data["risk_score"],
+        errors="coerce"
+    )
+    .fillna(0)
     .mean()
 )
+
 
 average_priority_score = (
     priority_data["priority_score"]
@@ -141,7 +314,7 @@ average_priority_score = (
 
 
 # ============================================================
-# Step 7: Risk KPI Calculation
+# Step 10: Risk KPI Calculation
 # ============================================================
 
 critical_risk = (
@@ -150,11 +323,13 @@ critical_risk = (
     .sum()
 )
 
+
 high_risk = (
     risk_data["risk_category"]
     .eq("High Risk")
     .sum()
 )
+
 
 medium_risk = (
     risk_data["risk_category"]
@@ -162,11 +337,13 @@ medium_risk = (
     .sum()
 )
 
+
 low_risk = (
     risk_data["risk_category"]
     .eq("Low Risk")
     .sum()
 )
+
 
 healthy_sellers = (
     risk_data["risk_category"]
@@ -176,7 +353,7 @@ healthy_sellers = (
 
 
 # ============================================================
-# Step 8: Action KPI Calculation
+# Step 11: Action KPI Calculation
 # ============================================================
 
 immediate_actions = (
@@ -185,11 +362,13 @@ immediate_actions = (
     .sum()
 )
 
+
 high_actions = (
     action_data["action_priority"]
     .eq("High")
     .sum()
 )
+
 
 medium_actions = (
     action_data["action_priority"]
@@ -197,11 +376,13 @@ medium_actions = (
     .sum()
 )
 
+
 low_actions = (
     action_data["action_priority"]
     .eq("Low")
     .sum()
 )
+
 
 maintain_actions = (
     action_data["action_priority"]
@@ -211,7 +392,7 @@ maintain_actions = (
 
 
 # ============================================================
-# Step 9: Revenue Requiring Attention
+# Step 12: Revenue Requiring Attention
 # ============================================================
 
 attention_data = action_data[
@@ -222,22 +403,31 @@ attention_data = action_data[
             "High"
         ]
     )
-]
+].copy()
 
 
 attention_revenue = (
-    attention_data["total_revenue"]
+    pd.to_numeric(
+        attention_data["total_revenue"],
+        errors="coerce"
+    )
+    .fillna(0)
     .sum()
 )
 
+
 attention_profit = (
-    attention_data["profit"]
+    pd.to_numeric(
+        attention_data["profit"],
+        errors="coerce"
+    )
+    .fillna(0)
     .sum()
 )
 
 
 # ============================================================
-# Step 10: Attention Revenue Percentage
+# Step 13: Attention Revenue Percentage
 # ============================================================
 
 if total_revenue > 0:
@@ -254,7 +444,7 @@ else:
 
 
 # ============================================================
-# Step 11: Create KPI DataFrame
+# Step 14: KPI Summary
 # ============================================================
 
 kpi_summary = pd.DataFrame(
@@ -351,7 +541,7 @@ kpi_summary = pd.DataFrame(
 
 
 # ============================================================
-# Step 12: Risk Summary
+# Step 15: Risk Summary
 # ============================================================
 
 risk_summary = (
@@ -360,6 +550,7 @@ risk_summary = (
         "risk_category"
     )
     .agg(
+
         seller_count=(
             "seller_id",
             "count"
@@ -379,16 +570,22 @@ risk_summary = (
             "risk_score",
             "mean"
         )
+
     )
     .reset_index()
 )
 
 
 risk_order = {
+
     "Critical Risk": 1,
+
     "High Risk": 2,
+
     "Medium Risk": 3,
+
     "Low Risk": 4,
+
     "Healthy": 5
 }
 
@@ -401,21 +598,31 @@ risk_summary["sort_order"] = (
 
 risk_summary = (
     risk_summary
-    .sort_values("sort_order")
-    .drop(columns=["sort_order"])
+    .sort_values(
+        "sort_order"
+    )
+    .drop(
+        columns=["sort_order"]
+    )
     .reset_index(drop=True)
 )
 
 
 # ============================================================
-# Step 13: Risk Percentages
+# Step 16: Risk Percentages
 # ============================================================
 
-risk_summary["seller_percentage"] = (
-    risk_summary["seller_count"]
-    /
-    total_sellers
-) * 100
+if total_sellers > 0:
+
+    risk_summary["seller_percentage"] = (
+        risk_summary["seller_count"]
+        /
+        total_sellers
+    ) * 100
+
+else:
+
+    risk_summary["seller_percentage"] = 0
 
 
 if total_revenue > 0:
@@ -431,30 +638,28 @@ else:
     risk_summary["revenue_percentage"] = 0
 
 
-risk_summary[
-    [
-        "total_revenue",
-        "total_profit",
-        "average_risk_score",
-        "seller_percentage",
-        "revenue_percentage"
-    ]
-] = (
-    risk_summary[
-        [
-            "total_revenue",
-            "total_profit",
-            "average_risk_score",
-            "seller_percentage",
-            "revenue_percentage"
-        ]
-    ]
+risk_numeric_columns = [
+
+    "total_revenue",
+
+    "total_profit",
+
+    "average_risk_score",
+
+    "seller_percentage",
+
+    "revenue_percentage"
+]
+
+
+risk_summary[risk_numeric_columns] = (
+    risk_summary[risk_numeric_columns]
     .round(2)
 )
 
 
 # ============================================================
-# Step 14: Action Summary
+# Step 17: Action Summary
 # ============================================================
 
 action_summary = (
@@ -463,6 +668,7 @@ action_summary = (
         "action_priority"
     )
     .agg(
+
         seller_count=(
             "seller_id",
             "count"
@@ -487,16 +693,22 @@ action_summary = (
             "priority_score",
             "mean"
         )
+
     )
     .reset_index()
 )
 
 
 action_order = {
+
     "Immediate": 1,
+
     "High": 2,
+
     "Medium": 3,
+
     "Low": 4,
+
     "Maintain": 5
 }
 
@@ -509,21 +721,31 @@ action_summary["sort_order"] = (
 
 action_summary = (
     action_summary
-    .sort_values("sort_order")
-    .drop(columns=["sort_order"])
+    .sort_values(
+        "sort_order"
+    )
+    .drop(
+        columns=["sort_order"]
+    )
     .reset_index(drop=True)
 )
 
 
 # ============================================================
-# Step 15: Action Percentages
+# Step 18: Action Percentages
 # ============================================================
 
-action_summary["seller_percentage"] = (
-    action_summary["seller_count"]
-    /
-    total_sellers
-) * 100
+if total_sellers > 0:
+
+    action_summary["seller_percentage"] = (
+        action_summary["seller_count"]
+        /
+        total_sellers
+    ) * 100
+
+else:
+
+    action_summary["seller_percentage"] = 0
 
 
 if total_revenue > 0:
@@ -539,32 +761,30 @@ else:
     action_summary["revenue_percentage"] = 0
 
 
-action_summary[
-    [
-        "total_revenue",
-        "total_profit",
-        "average_risk_score",
-        "average_priority_score",
-        "seller_percentage",
-        "revenue_percentage"
-    ]
-] = (
-    action_summary[
-        [
-            "total_revenue",
-            "total_profit",
-            "average_risk_score",
-            "average_priority_score",
-            "seller_percentage",
-            "revenue_percentage"
-        ]
-    ]
+action_numeric_columns = [
+
+    "total_revenue",
+
+    "total_profit",
+
+    "average_risk_score",
+
+    "average_priority_score",
+
+    "seller_percentage",
+
+    "revenue_percentage"
+]
+
+
+action_summary[action_numeric_columns] = (
+    action_summary[action_numeric_columns]
     .round(2)
 )
 
 
 # ============================================================
-# Step 16: Top Sellers Requiring Attention
+# Step 19: Top Sellers Requiring Attention
 # ============================================================
 
 top_attention_sellers = (
@@ -584,19 +804,27 @@ top_attention_sellers = (
 
 
 attention_columns = [
+
     "seller_id",
+
     "total_orders",
+
     "total_revenue",
+
     "profit",
+
     "risk_score",
+
     "priority_score",
+
     "risk_category",
+
     "action_priority"
 ]
 
 
 # ============================================================
-# Step 17: Display Dashboard Summary
+# Step 20: Display Dashboard Summary
 # ============================================================
 
 print("\n============================================================")
@@ -605,58 +833,67 @@ print("============================================================")
 
 
 print(
-    f"Total Sellers              : "
+    f"Total Sellers               : "
     f"{total_sellers}"
 )
 
+
 print(
-    f"Total Revenue              : "
+    f"Total Revenue               : "
     f"{total_revenue:.2f}"
 )
 
+
 print(
-    f"Total Profit               : "
+    f"Total Profit                : "
     f"{total_profit:.2f}"
 )
 
+
 print(
-    f"Average Risk Score         : "
+    f"Average Risk Score          : "
     f"{average_risk_score:.2f}"
 )
 
+
 print(
-    f"Average Priority Score     : "
+    f"Average Priority Score      : "
     f"{average_priority_score:.2f}"
 )
 
+
 print(
-    f"Immediate Action Sellers   : "
+    f"Immediate Action Sellers    : "
     f"{immediate_actions}"
 )
 
+
 print(
-    f"High Priority Sellers      : "
+    f"High Priority Sellers       : "
     f"{high_actions}"
 )
 
+
 print(
-    f"Revenue Requiring Attention: "
+    f"Revenue Requiring Attention : "
     f"{attention_revenue:.2f}"
 )
 
+
 print(
-    f"Attention Revenue %        : "
+    f"Attention Revenue %         : "
     f"{attention_revenue_percentage:.2f}%"
 )
 
 
 # ============================================================
-# Step 18: Display Risk Summary
+# Step 21: Display Risk Summary
 # ============================================================
 
 print("\n============================================================")
 print("Risk Summary")
 print("============================================================")
+
 
 print(
     risk_summary.to_string(
@@ -666,12 +903,13 @@ print(
 
 
 # ============================================================
-# Step 19: Display Action Summary
+# Step 22: Display Action Summary
 # ============================================================
 
 print("\n============================================================")
 print("Action Priority Summary")
 print("============================================================")
+
 
 print(
     action_summary.to_string(
@@ -681,7 +919,7 @@ print(
 
 
 # ============================================================
-# Step 20: Display Top Attention Sellers
+# Step 23: Display Top Attention Sellers
 # ============================================================
 
 print("\n============================================================")
@@ -691,11 +929,23 @@ print("============================================================")
 
 if not top_attention_sellers.empty:
 
+    available_attention_columns = [
+
+        column
+
+        for column in attention_columns
+
+        if column in top_attention_sellers.columns
+    ]
+
+
     print(
         top_attention_sellers[
-            attention_columns
+            available_attention_columns
         ]
-        .to_string(index=False)
+        .to_string(
+            index=False
+        )
     )
 
 else:
@@ -707,7 +957,7 @@ else:
 
 
 # ============================================================
-# Step 21: Save KPI Summary
+# Step 24: Save KPI Summary
 # ============================================================
 
 kpi_path = (
@@ -727,7 +977,7 @@ print(kpi_path)
 
 
 # ============================================================
-# Step 22: Save Risk Summary
+# Step 25: Save Risk Summary
 # ============================================================
 
 risk_summary_path = (
@@ -747,7 +997,7 @@ print(risk_summary_path)
 
 
 # ============================================================
-# Step 23: Save Action Summary
+# Step 26: Save Action Summary
 # ============================================================
 
 action_summary_path = (
@@ -767,7 +1017,7 @@ print(action_summary_path)
 
 
 # ============================================================
-# Step 24: Save Attention Sellers
+# Step 27: Save Attention Sellers
 # ============================================================
 
 attention_path = (
@@ -777,7 +1027,13 @@ attention_path = (
 
 
 top_attention_sellers[
-    attention_columns
+    [
+        column
+
+        for column in attention_columns
+
+        if column in top_attention_sellers.columns
+    ]
 ].to_csv(
     attention_path,
     index=False
@@ -789,7 +1045,7 @@ print(attention_path)
 
 
 # ============================================================
-# Step 25: Save Combined Dashboard Data
+# Step 28: Save Combined Dashboard Data
 # ============================================================
 
 combined_path = (
@@ -798,9 +1054,7 @@ combined_path = (
 )
 
 
-dashboard_data = (
-    action_data.copy()
-)
+dashboard_data = action_data.copy()
 
 
 dashboard_data.to_csv(
@@ -814,12 +1068,53 @@ print(combined_path)
 
 
 # ============================================================
-# Step 26: Completion
+# Step 29: Final Validation
 # ============================================================
 
 print("\n============================================================")
+print("Final Validation")
+print("============================================================")
+
+
+print(
+    f"Risk columns available       : "
+    f"{len(risk_data.columns)}"
+)
+
+
+print(
+    f"Priority columns available   : "
+    f"{len(priority_data.columns)}"
+)
+
+
+print(
+    f"Action columns available     : "
+    f"{len(action_data.columns)}"
+)
+
+
+print(
+    f"Priority score available     : "
+    f"{'Yes' if 'priority_score' in priority_data.columns else 'No'}"
+)
+
+
+print(
+    f"Action priority score        : "
+    f"{'Yes' if 'priority_score' in action_data.columns else 'No'}"
+)
+
+
+# ============================================================
+# Step 30: Completion
+# ============================================================
+
+print("\n============================================================")
+
 print(
     "Step 91 Seller Risk & Action Dashboard Summary "
     "completed successfully."
 )
+
 print("============================================================")
